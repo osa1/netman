@@ -187,6 +187,31 @@ pub async fn connect(network: Network, password: String) -> Result<(), String> {
     Ok(())
 }
 
+async fn has_active_wifi(
+    nm: &NetworkManagerProxy<'_>,
+    connection: &zbus::Connection,
+) -> Result<bool, String> {
+    let active_connections = nm
+        .active_connections()
+        .await
+        .map_err(|e| format!("Failed to get active connections: {e}"))?;
+
+    for path in &active_connections {
+        let ac = ActiveConnectionProxy::builder(connection)
+            .path(path)
+            .map_err(|e| format!("Invalid active connection path: {e}"))?
+            .build()
+            .await
+            .map_err(|e| format!("Failed to create active connection proxy: {e}"))?;
+
+        if ac.connection_type().await.unwrap_or_default() == "802-11-wireless" {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 pub async fn disconnect() -> Result<(), String> {
     let connection = zbus::Connection::system()
         .await
@@ -201,6 +226,7 @@ pub async fn disconnect() -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to get active connections: {e}"))?;
 
+    let mut found = false;
     for path in &active_connections {
         let ac = ActiveConnectionProxy::builder(&connection)
             .path(path)
@@ -213,9 +239,22 @@ pub async fn disconnect() -> Result<(), String> {
             nm.deactivate_connection(path)
                 .await
                 .map_err(|e| format!("Failed to disconnect: {e}"))?;
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        return Err("No active WiFi connection found".to_string());
+    }
+
+    // Poll until NetworkManager confirms there's no active WiFi connection
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if !has_active_wifi(&nm, &connection).await? {
             return Ok(());
         }
     }
 
-    Err("No active WiFi connection found".to_string())
+    Err("Disconnect timed out".to_string())
 }

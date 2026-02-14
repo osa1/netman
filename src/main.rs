@@ -26,6 +26,7 @@ enum App {
         password: String,
     },
     Connecting,
+    Disconnecting,
     Error(String),
 }
 
@@ -67,7 +68,10 @@ impl App {
                 *self = App::Loading;
                 Task::perform(nm::scan_networks(), Message::NetworksLoaded)
             }
-            Message::Disconnect => Task::perform(nm::disconnect(), Message::Disconnected),
+            Message::Disconnect => {
+                *self = App::Disconnecting;
+                Task::perform(nm::disconnect(), Message::Disconnected)
+            }
             Message::Disconnected(result) => {
                 if let Err(e) = result {
                     *self = App::Error(e);
@@ -144,6 +148,7 @@ impl App {
         let content: Element<Message> = match self {
             App::Loading => column![text("Scanning...").size(18)].into(),
             App::Connecting => column![text("Connecting...").size(18)].into(),
+            App::Disconnecting => column![text("Disconnecting...").size(18)].into(),
             App::Loaded {
                 networks,
                 connecting_ssid,
