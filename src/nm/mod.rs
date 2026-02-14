@@ -265,6 +265,37 @@ async fn find_saved_connection(
     Ok(None)
 }
 
+/// Poll an active connection until it reaches Activated or fails.
+async fn wait_for_activation(
+    connection: &zbus::Connection,
+    active_path: &zbus::zvariant::OwnedObjectPath,
+) -> Result<(), String> {
+    let ac = ActiveConnectionProxy::builder(connection)
+        .path(active_path)
+        .map_err(|e| format!("Invalid active connection path: {e}"))?
+        .build()
+        .await
+        .map_err(|e| format!("Failed to create active connection proxy: {e}"))?;
+
+    for _ in 0..15 {
+        match ac.state().await {
+            Ok(2) => return Ok(()), // Activated
+            Ok(3) | Ok(4) => {
+                // Deactivating / Deactivated
+                return Err("Connection failed (wrong password?)".to_string());
+            }
+            Ok(1) => {} // Activating — keep waiting
+            Ok(_) | Err(_) => {
+                // Unknown or proxy error (object removed)
+                return Err("Connection failed".to_string());
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+
+    Err("Connection timed out".to_string())
+}
+
 pub async fn connect(network: Network, password: String) -> Result<(), String> {
     let connection = zbus::Connection::system()
         .await
@@ -283,10 +314,11 @@ pub async fn connect(network: Network, password: String) -> Result<(), String> {
     if let Some(saved_path) = find_saved_connection(&connection, &network.ssid).await? {
         let saved_obj = zbus::zvariant::ObjectPath::try_from(saved_path.as_str())
             .map_err(|e| format!("Invalid saved connection path: {e}"))?;
-        nm.activate_connection(&saved_obj, &device_path, &ap_path)
+        let active_path = nm
+            .activate_connection(&saved_obj, &device_path, &ap_path)
             .await
             .map_err(|e| format!("Failed to connect: {e}"))?;
-        return Ok(());
+        return wait_for_activation(&connection, &active_path).await;
     }
 
     // No saved connection — build settings and create a new one
@@ -314,11 +346,12 @@ pub async fn connect(network: Network, password: String) -> Result<(), String> {
         settings.insert("802-11-wireless-security", security_section);
     }
 
-    nm.add_and_activate_connection(settings, &device_path, &ap_path)
+    let (active_path, _settings_path) = nm
+        .add_and_activate_connection(settings, &device_path, &ap_path)
         .await
         .map_err(|e| format!("Failed to connect: {e}"))?;
 
-    Ok(())
+    wait_for_activation(&connection, &active_path).await
 }
 
 /// Check if the given device has an active WiFi connection.

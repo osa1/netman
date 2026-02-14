@@ -101,6 +101,9 @@ pub trait ActiveConnection {
     fn connection_type(&self) -> zbus::Result<String>;
 
     #[zbus(property)]
+    fn state(&self) -> zbus::Result<u32>;
+
+    #[zbus(property)]
     fn devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
 }
 
