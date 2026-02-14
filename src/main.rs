@@ -1,11 +1,12 @@
 mod nm;
 
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
-use iced::{Element, Task, Theme, window};
+use iced::{Element, Subscription, Task, Theme, keyboard, window};
 
 fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
         .title("netman")
+        .subscription(App::subscription)
         .theme(Theme::Dark)
         .window(window::Settings {
             size: iced::Size::new(400.0, 500.0),
@@ -41,6 +42,7 @@ enum Message {
     SubmitConnect,
     CancelConnect,
     Connected(Result<(), String>),
+    NoOp,
 }
 
 impl App {
@@ -49,6 +51,16 @@ impl App {
             App::Loading,
             Task::perform(nm::scan_networks(), Message::NetworksLoaded),
         )
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        keyboard::listen().map(|event| match event {
+            keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                ..
+            } => Message::CancelConnect,
+            _ => Message::NoOp,
+        })
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -141,6 +153,7 @@ impl App {
                 *self = App::Loading;
                 Task::perform(nm::scan_networks(), Message::NetworksLoaded)
             }
+            Message::NoOp => Task::none(),
         }
     }
 
@@ -185,14 +198,7 @@ impl App {
                                 .size(14)
                                 .width(iced::Fill);
 
-                            row![
-                                input,
-                                button("Go").on_press(Message::SubmitConnect),
-                                button("X").on_press(Message::CancelConnect),
-                            ]
-                            .align_y(iced::Alignment::Center)
-                            .spacing(4)
-                            .padding(6)
+                            row![input].align_y(iced::Alignment::Center).padding(6)
                         } else {
                             let mut r = row![
                                 column![ssid_text, info].spacing(2),
