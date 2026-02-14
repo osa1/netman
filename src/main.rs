@@ -109,6 +109,7 @@ impl App {
                     }
                     *connecting_ssid = Some(ssid);
                     *password = String::new();
+                    return iced::widget::operation::focus("password-input");
                 }
                 Task::none()
             }
@@ -192,6 +193,7 @@ impl App {
                         let network_row = if is_entering_password {
                             // Password input row
                             let input = text_input("Password", password)
+                                .id("password-input")
                                 .on_input(Message::PasswordChanged)
                                 .on_submit(Message::SubmitConnect)
                                 .secure(true)
