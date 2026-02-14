@@ -66,6 +66,15 @@ pub trait Wireless {
 
     #[zbus(property)]
     fn active_access_point(&self) -> zbus::Result<OwnedObjectPath>;
+
+    #[zbus(signal)]
+    fn access_point_added(&self, access_point: zbus::zvariant::ObjectPath<'_>) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    fn access_point_removed(
+        &self,
+        access_point: zbus::zvariant::ObjectPath<'_>,
+    ) -> zbus::Result<()>;
 }
 
 #[proxy(

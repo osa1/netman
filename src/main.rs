@@ -1,5 +1,6 @@
 mod nm;
 
+use iced::futures::{SinkExt, StreamExt};
 use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input};
 use iced::{Element, Subscription, Task, Theme, event, keyboard, window};
 
@@ -48,6 +49,7 @@ enum Message {
     DevicesLoaded(Result<Vec<nm::WifiDevice>, String>),
     DeviceSelected(nm::WifiDevice),
     NetworksLoaded(Result<Vec<nm::Network>, String>),
+    NetworkChanged,
     Refresh,
     Back,
     Disconnect,
@@ -59,6 +61,50 @@ enum Message {
     Connected(Result<(), String>),
 }
 
+#[allow(clippy::ptr_arg)]
+fn nm_signals(device_path: &String) -> iced::futures::stream::BoxStream<'static, Message> {
+    let device_path = device_path.clone();
+    Box::pin(iced::stream::channel(
+        10,
+        async move |mut output: iced::futures::channel::mpsc::Sender<Message>| {
+            use nm::proxy::{NetworkManagerProxy, WirelessProxy};
+
+            let Ok(conn) = zbus::Connection::system().await else {
+                return;
+            };
+            let Ok(nm): Result<NetworkManagerProxy, _> = NetworkManagerProxy::new(&conn).await
+            else {
+                return;
+            };
+            let Ok(wireless): Result<WirelessProxy, _> = WirelessProxy::builder(&conn)
+                .path(device_path.as_str())
+                .unwrap()
+                .build()
+                .await
+            else {
+                return;
+            };
+
+            let Ok(ap_added) = wireless.receive_access_point_added().await else {
+                return;
+            };
+            let Ok(ap_removed) = wireless.receive_access_point_removed().await else {
+                return;
+            };
+            let active_changed = nm.receive_active_connections_changed().await;
+
+            let mut merged = iced::futures::stream::select(
+                iced::futures::stream::select(ap_added.map(|_| ()), ap_removed.map(|_| ())),
+                active_changed.map(|_| ()),
+            );
+
+            while merged.next().await.is_some() {
+                let _ = output.send(Message::NetworkChanged).await;
+            }
+        },
+    ))
+}
+
 impl App {
     fn new() -> (Self, Task<Message>) {
         (
@@ -68,13 +114,25 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(|event, _status, _window| match event {
+        let kbd = event::listen_with(|event, _status, _window| match event {
             event::Event::Keyboard(keyboard::Event::KeyPressed {
                 key: keyboard::Key::Named(keyboard::key::Named::Escape),
                 ..
             }) => Some(Message::CancelConnect),
             _ => None,
-        })
+        });
+
+        if let App::Loaded {
+            devices,
+            selected_device,
+            ..
+        } = self
+        {
+            let device_path = devices[*selected_device].path.clone();
+            Subscription::batch([kbd, Subscription::run_with(device_path, nm_signals)])
+        } else {
+            kbd
+        }
     }
 
     /// Helper: get devices and selected index from current state (for state transitions).
@@ -182,6 +240,21 @@ impl App {
                         }
                     }
                     Err(e) => self.goto_error(e),
+                }
+                Task::none()
+            }
+            Message::NetworkChanged => {
+                if let App::Loaded {
+                    devices,
+                    selected_device,
+                    ..
+                } = self
+                {
+                    let path = devices[*selected_device].path.clone();
+                    return Task::perform(
+                        async move { nm::scan_networks(&path).await },
+                        Message::NetworksLoaded,
+                    );
                 }
                 Task::none()
             }
