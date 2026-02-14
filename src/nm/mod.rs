@@ -8,6 +8,24 @@ use proxy::{
 };
 
 #[derive(Debug, Clone)]
+pub struct WifiDevice {
+    pub path: String,
+    pub interface: String,
+}
+
+impl std::fmt::Display for WifiDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.interface)
+    }
+}
+
+impl PartialEq for WifiDevice {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Network {
     pub ssid: String,
     pub strength: u8,
@@ -95,7 +113,7 @@ async fn saved_wifi_ssids(connection: &zbus::Connection) -> std::collections::Ha
     ssids
 }
 
-pub async fn scan_networks() -> Result<Vec<Network>, String> {
+pub async fn list_wifi_devices() -> Result<Vec<WifiDevice>, String> {
     let connection = zbus::Connection::system()
         .await
         .map_err(|e| format!("Failed to connect to system D-Bus: {e}"))?;
@@ -109,8 +127,7 @@ pub async fn scan_networks() -> Result<Vec<Network>, String> {
         .await
         .map_err(|e| format!("Failed to get devices: {e}"))?;
 
-    // Find the WiFi device (DeviceType == 2)
-    let mut wifi_device_path = None;
+    let mut wifi_devices = Vec::new();
     for path in &devices {
         let device = DeviceProxy::builder(&connection)
             .path(path)
@@ -120,12 +137,28 @@ pub async fn scan_networks() -> Result<Vec<Network>, String> {
             .map_err(|e| format!("Failed to create device proxy: {e}"))?;
 
         if device.device_type().await.unwrap_or(0) == 2 {
-            wifi_device_path = Some(path.clone());
-            break;
+            let interface = device.interface().await.unwrap_or_default();
+            wifi_devices.push(WifiDevice {
+                path: path.to_string(),
+                interface,
+            });
         }
     }
 
-    let wifi_path = wifi_device_path.ok_or("No WiFi device found")?;
+    if wifi_devices.is_empty() {
+        return Err("No WiFi devices found".to_string());
+    }
+
+    Ok(wifi_devices)
+}
+
+pub async fn scan_networks(device_path: &str) -> Result<Vec<Network>, String> {
+    let connection = zbus::Connection::system()
+        .await
+        .map_err(|e| format!("Failed to connect to system D-Bus: {e}"))?;
+
+    let wifi_path = zbus::zvariant::ObjectPath::try_from(device_path)
+        .map_err(|e| format!("Invalid device path: {e}"))?;
 
     let wireless = WirelessProxy::builder(&connection)
         .path(&wifi_path)
@@ -288,9 +321,11 @@ pub async fn connect(network: Network, password: String) -> Result<(), String> {
     Ok(())
 }
 
-async fn has_active_wifi(
+/// Check if the given device has an active WiFi connection.
+async fn has_active_wifi_on_device(
     nm: &NetworkManagerProxy<'_>,
     connection: &zbus::Connection,
+    device_path: &str,
 ) -> Result<bool, String> {
     let active_connections = nm
         .active_connections()
@@ -306,14 +341,17 @@ async fn has_active_wifi(
             .map_err(|e| format!("Failed to create active connection proxy: {e}"))?;
 
         if ac.connection_type().await.unwrap_or_default() == "802-11-wireless" {
-            return Ok(true);
+            let devices = ac.devices().await.unwrap_or_default();
+            if devices.iter().any(|d| d.as_str() == device_path) {
+                return Ok(true);
+            }
         }
     }
 
     Ok(false)
 }
 
-pub async fn disconnect() -> Result<(), String> {
+pub async fn disconnect(device_path: &str) -> Result<(), String> {
     let connection = zbus::Connection::system()
         .await
         .map_err(|e| format!("Failed to connect to system D-Bus: {e}"))?;
@@ -337,22 +375,25 @@ pub async fn disconnect() -> Result<(), String> {
             .map_err(|e| format!("Failed to create active connection proxy: {e}"))?;
 
         if ac.connection_type().await.unwrap_or_default() == "802-11-wireless" {
-            nm.deactivate_connection(path)
-                .await
-                .map_err(|e| format!("Failed to disconnect: {e}"))?;
-            found = true;
-            break;
+            let devices = ac.devices().await.unwrap_or_default();
+            if devices.iter().any(|d| d.as_str() == device_path) {
+                nm.deactivate_connection(path)
+                    .await
+                    .map_err(|e| format!("Failed to disconnect: {e}"))?;
+                found = true;
+                break;
+            }
         }
     }
 
     if !found {
-        return Err("No active WiFi connection found".to_string());
+        return Err("No active WiFi connection found on this device".to_string());
     }
 
-    // Poll until NetworkManager confirms there's no active WiFi connection
+    // Poll until NetworkManager confirms no active WiFi on this device
     for _ in 0..10 {
         std::thread::sleep(std::time::Duration::from_secs(1));
-        if !has_active_wifi(&nm, &connection).await? {
+        if !has_active_wifi_on_device(&nm, &connection, device_path).await? {
             return Ok(());
         }
     }

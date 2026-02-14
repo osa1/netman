@@ -1,6 +1,6 @@
 mod nm;
 
-use iced::widget::{button, column, container, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input};
 use iced::{Element, Subscription, Task, Theme, event, keyboard, window};
 
 fn main() -> iced::Result {
@@ -9,7 +9,7 @@ fn main() -> iced::Result {
         .subscription(App::subscription)
         .theme(Theme::Dark)
         .window(window::Settings {
-            size: iced::Size::new(400.0, 500.0),
+            size: iced::Size::new(480.0, 500.0),
             platform_specific: window::settings::PlatformSpecific {
                 application_id: "netman".to_string(),
                 ..Default::default()
@@ -22,17 +22,27 @@ fn main() -> iced::Result {
 enum App {
     Loading,
     Loaded {
+        devices: Vec<nm::WifiDevice>,
+        selected_device: usize,
         networks: Vec<nm::Network>,
         connecting_ssid: Option<String>,
         password: String,
     },
-    Connecting,
-    Disconnecting,
+    Connecting {
+        devices: Vec<nm::WifiDevice>,
+        selected_device: usize,
+    },
+    Disconnecting {
+        devices: Vec<nm::WifiDevice>,
+        selected_device: usize,
+    },
     Error(String),
 }
 
 #[derive(Debug, Clone)]
 enum Message {
+    DevicesLoaded(Result<Vec<nm::WifiDevice>, String>),
+    DeviceSelected(nm::WifiDevice),
     NetworksLoaded(Result<Vec<nm::Network>, String>),
     Refresh,
     Disconnect,
@@ -48,7 +58,7 @@ impl App {
     fn new() -> (Self, Task<Message>) {
         (
             App::Loading,
-            Task::perform(nm::scan_networks(), Message::NetworksLoaded),
+            Task::perform(nm::list_wifi_devices(), Message::DevicesLoaded),
         )
     }
 
@@ -62,37 +72,147 @@ impl App {
         })
     }
 
+    /// Helper: get devices and selected index from current state (for state transitions).
+    fn device_info(&self) -> Option<(Vec<nm::WifiDevice>, usize)> {
+        match self {
+            App::Loaded {
+                devices,
+                selected_device,
+                ..
+            }
+            | App::Connecting {
+                devices,
+                selected_device,
+            }
+            | App::Disconnecting {
+                devices,
+                selected_device,
+            } => Some((devices.clone(), *selected_device)),
+            _ => None,
+        }
+    }
+
+    /// Helper: scan networks for the currently selected device.
+    fn scan_selected(&self, devices: &[nm::WifiDevice], selected: usize) -> Task<Message> {
+        let path = devices[selected].path.clone();
+        Task::perform(
+            async move { nm::scan_networks(&path).await },
+            Message::NetworksLoaded,
+        )
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::NetworksLoaded(result) => {
-                *self = match result {
-                    Ok(networks) => App::Loaded {
-                        networks,
+            Message::DevicesLoaded(result) => match result {
+                Ok(devices) => {
+                    let task = self.scan_selected(&devices, 0);
+                    *self = App::Loaded {
+                        devices,
+                        selected_device: 0,
+                        networks: Vec::new(),
                         connecting_ssid: None,
                         password: String::new(),
-                    },
-                    Err(e) => App::Error(e),
-                };
+                    };
+                    task
+                }
+                Err(e) => {
+                    *self = App::Error(e);
+                    Task::none()
+                }
+            },
+            Message::DeviceSelected(device) => {
+                if let App::Loaded {
+                    devices,
+                    selected_device,
+                    networks,
+                    connecting_ssid,
+                    password,
+                } = self
+                    && let Some(idx) = devices.iter().position(|d| d == &device)
+                {
+                    *selected_device = idx;
+                    *networks = Vec::new();
+                    *connecting_ssid = None;
+                    *password = String::new();
+                    let path = devices[idx].path.clone();
+                    return Task::perform(
+                        async move { nm::scan_networks(&path).await },
+                        Message::NetworksLoaded,
+                    );
+                }
+                Task::none()
+            }
+            Message::NetworksLoaded(result) => {
+                match result {
+                    Ok(nets) => {
+                        if let App::Loaded { networks, .. } = self {
+                            *networks = nets;
+                        } else if let Some((devices, selected_device)) = self.device_info() {
+                            *self = App::Loaded {
+                                devices,
+                                selected_device,
+                                networks: nets,
+                                connecting_ssid: None,
+                                password: String::new(),
+                            };
+                        }
+                    }
+                    Err(e) => {
+                        *self = App::Error(e);
+                    }
+                }
                 Task::none()
             }
             Message::Refresh => {
-                *self = App::Loading;
-                Task::perform(nm::scan_networks(), Message::NetworksLoaded)
+                if let Some((devices, selected)) = self.device_info() {
+                    let task = self.scan_selected(&devices, selected);
+                    *self = App::Loaded {
+                        devices,
+                        selected_device: selected,
+                        networks: Vec::new(),
+                        connecting_ssid: None,
+                        password: String::new(),
+                    };
+                    return task;
+                }
+                Task::none()
             }
             Message::Disconnect => {
-                *self = App::Disconnecting;
-                Task::perform(nm::disconnect(), Message::Disconnected)
+                if let Some((devices, selected)) = self.device_info() {
+                    let path = devices[selected].path.clone();
+                    *self = App::Disconnecting {
+                        devices,
+                        selected_device: selected,
+                    };
+                    return Task::perform(
+                        async move { nm::disconnect(&path).await },
+                        Message::Disconnected,
+                    );
+                }
+                Task::none()
             }
             Message::Disconnected(result) => {
                 if let Err(e) = result {
                     *self = App::Error(e);
                     return Task::none();
                 }
-                *self = App::Loading;
-                Task::perform(nm::scan_networks(), Message::NetworksLoaded)
+                if let Some((devices, selected)) = self.device_info() {
+                    let task = self.scan_selected(&devices, selected);
+                    *self = App::Loaded {
+                        devices,
+                        selected_device: selected,
+                        networks: Vec::new(),
+                        connecting_ssid: None,
+                        password: String::new(),
+                    };
+                    return task;
+                }
+                Task::none()
             }
             Message::Connect(ssid) => {
                 if let App::Loaded {
+                    devices,
+                    selected_device,
                     networks,
                     connecting_ssid,
                     password,
@@ -103,7 +223,12 @@ impl App {
                         && (net.security == "Open" || net.is_saved)
                     {
                         let net = net.clone();
-                        *self = App::Connecting;
+                        let devs = devices.clone();
+                        let sel = *selected_device;
+                        *self = App::Connecting {
+                            devices: devs,
+                            selected_device: sel,
+                        };
                         return Task::perform(nm::connect(net, String::new()), Message::Connected);
                     }
                     *connecting_ssid = Some(ssid);
@@ -120,6 +245,8 @@ impl App {
             }
             Message::SubmitConnect => {
                 if let App::Loaded {
+                    devices,
+                    selected_device,
                     networks,
                     connecting_ssid: Some(ssid),
                     password,
@@ -128,7 +255,12 @@ impl App {
                 {
                     let net = net.clone();
                     let pw = password.clone();
-                    *self = App::Connecting;
+                    let devs = devices.clone();
+                    let sel = *selected_device;
+                    *self = App::Connecting {
+                        devices: devs,
+                        selected_device: sel,
+                    };
                     return Task::perform(nm::connect(net, pw), Message::Connected);
                 }
                 Task::none()
@@ -150,8 +282,18 @@ impl App {
                     *self = App::Error(e);
                     return Task::none();
                 }
-                *self = App::Loading;
-                Task::perform(nm::scan_networks(), Message::NetworksLoaded)
+                if let Some((devices, selected)) = self.device_info() {
+                    let task = self.scan_selected(&devices, selected);
+                    *self = App::Loaded {
+                        devices,
+                        selected_device: selected,
+                        networks: Vec::new(),
+                        connecting_ssid: None,
+                        password: String::new(),
+                    };
+                    return task;
+                }
+                Task::none()
             }
         }
     }
@@ -159,24 +301,37 @@ impl App {
     fn view(&self) -> Element<'_, Message> {
         let content: Element<Message> = match self {
             App::Loading => column![text("Scanning...").size(18)].into(),
-            App::Connecting => column![text("Connecting...").size(18)].into(),
-            App::Disconnecting => column![text("Disconnecting...").size(18)].into(),
+            App::Connecting { .. } => column![text("Connecting...").size(18)].into(),
+            App::Disconnecting { .. } => column![text("Disconnecting...").size(18)].into(),
             App::Loaded {
+                devices,
+                selected_device,
                 networks,
                 connecting_ssid,
                 password,
             } => {
-                let header = row![
-                    text("WiFi Networks").size(22),
-                    iced::widget::space::horizontal(),
-                    button("Refresh").on_press(Message::Refresh),
-                ]
-                .align_y(iced::Alignment::Center)
-                .spacing(10)
-                .padding(6);
+                let mut header = row![text("WiFi Networks").size(22),]
+                    .align_y(iced::Alignment::Center)
+                    .spacing(10)
+                    .padding(6);
+
+                if devices.len() > 1 {
+                    header = header.push(
+                        pick_list(
+                            devices.as_slice(),
+                            Some(&devices[*selected_device]),
+                            Message::DeviceSelected,
+                        )
+                        .text_size(14),
+                    );
+                }
+
+                header = header
+                    .push(iced::widget::space::horizontal())
+                    .push(button("Refresh").on_press(Message::Refresh));
 
                 if networks.is_empty() {
-                    column![header, text("No networks found.").size(16)]
+                    column![header, text("Scanning...").size(16)]
                         .spacing(15)
                         .into()
                 } else {

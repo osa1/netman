@@ -45,6 +45,9 @@ pub trait NetworkManager {
 pub trait Device {
     #[zbus(property)]
     fn device_type(&self) -> zbus::Result<u32>;
+
+    #[zbus(property)]
+    fn interface(&self) -> zbus::Result<String>;
 }
 
 #[proxy(
@@ -96,6 +99,9 @@ pub trait AccessPoint {
 pub trait ActiveConnection {
     #[zbus(property, name = "Type")]
     fn connection_type(&self) -> zbus::Result<String>;
+
+    #[zbus(property)]
+    fn devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
 }
 
 #[proxy(
