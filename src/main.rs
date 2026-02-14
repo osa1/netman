@@ -1,13 +1,20 @@
 mod nm;
 
 use iced::widget::{button, center, column, container, row, scrollable, text, text_input};
-use iced::{Element, Task, Theme};
+use iced::{Element, Task, Theme, window};
 
 fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
         .title("netman")
         .theme(Theme::Dark)
-        .window_size((400.0, 500.0))
+        .window(window::Settings {
+            size: iced::Size::new(400.0, 500.0),
+            platform_specific: window::settings::PlatformSpecific {
+                application_id: "netman".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
         .run()
 }
 
