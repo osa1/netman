@@ -1,7 +1,7 @@
 mod nm;
 
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
-use iced::{Element, Subscription, Task, Theme, keyboard, window};
+use iced::{Element, Subscription, Task, Theme, event, keyboard, window};
 
 fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
@@ -42,7 +42,6 @@ enum Message {
     SubmitConnect,
     CancelConnect,
     Connected(Result<(), String>),
-    NoOp,
 }
 
 impl App {
@@ -54,12 +53,12 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        keyboard::listen().map(|event| match event {
-            keyboard::Event::KeyPressed {
+        event::listen_with(|event, _status, _window| match event {
+            event::Event::Keyboard(keyboard::Event::KeyPressed {
                 key: keyboard::Key::Named(keyboard::key::Named::Escape),
                 ..
-            } => Message::CancelConnect,
-            _ => Message::NoOp,
+            }) => Some(Message::CancelConnect),
+            _ => None,
         })
     }
 
@@ -154,7 +153,6 @@ impl App {
                 *self = App::Loading;
                 Task::perform(nm::scan_networks(), Message::NetworksLoaded)
             }
-            Message::NoOp => Task::none(),
         }
     }
 
