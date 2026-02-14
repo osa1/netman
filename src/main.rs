@@ -36,7 +36,11 @@ enum App {
         devices: Vec<nm::WifiDevice>,
         selected_device: usize,
     },
-    Error(String),
+    Error {
+        message: String,
+        devices: Option<Vec<nm::WifiDevice>>,
+        selected_device: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +49,7 @@ enum Message {
     DeviceSelected(nm::WifiDevice),
     NetworksLoaded(Result<Vec<nm::Network>, String>),
     Refresh,
+    Back,
     Disconnect,
     Disconnected(Result<(), String>),
     Connect(String),
@@ -88,8 +93,23 @@ impl App {
                 devices,
                 selected_device,
             } => Some((devices.clone(), *selected_device)),
+            App::Error {
+                devices: Some(devices),
+                selected_device,
+                ..
+            } => Some((devices.clone(), *selected_device)),
             _ => None,
         }
+    }
+
+    /// Transition to error state, preserving device info if available.
+    fn goto_error(&mut self, e: String) {
+        let info = self.device_info();
+        *self = App::Error {
+            message: e,
+            devices: info.as_ref().map(|(d, _)| d.clone()),
+            selected_device: info.map(|(_, s)| s).unwrap_or(0),
+        };
     }
 
     /// Helper: scan networks for the currently selected device.
@@ -116,7 +136,11 @@ impl App {
                     task
                 }
                 Err(e) => {
-                    *self = App::Error(e);
+                    *self = App::Error {
+                        message: e,
+                        devices: None,
+                        selected_device: 0,
+                    };
                     Task::none()
                 }
             },
@@ -157,9 +181,21 @@ impl App {
                             };
                         }
                     }
-                    Err(e) => {
-                        *self = App::Error(e);
-                    }
+                    Err(e) => self.goto_error(e),
+                }
+                Task::none()
+            }
+            Message::Back => {
+                if let Some((devices, selected)) = self.device_info() {
+                    let task = self.scan_selected(&devices, selected);
+                    *self = App::Loaded {
+                        devices,
+                        selected_device: selected,
+                        networks: Vec::new(),
+                        connecting_ssid: None,
+                        password: String::new(),
+                    };
+                    return task;
                 }
                 Task::none()
             }
@@ -193,7 +229,7 @@ impl App {
             }
             Message::Disconnected(result) => {
                 if let Err(e) = result {
-                    *self = App::Error(e);
+                    self.goto_error(e);
                     return Task::none();
                 }
                 if let Some((devices, selected)) = self.device_info() {
@@ -279,7 +315,7 @@ impl App {
             }
             Message::Connected(result) => {
                 if let Err(e) = result {
-                    *self = App::Error(e);
+                    self.goto_error(e);
                     return Task::none();
                 }
                 if let Some((devices, selected)) = self.device_info() {
@@ -391,13 +427,17 @@ impl App {
                     .into()
                 }
             }
-            App::Error(e) => column![
-                text("Error").size(22),
-                text(e).size(14),
-                button("Retry").on_press(Message::Refresh),
-            ]
-            .spacing(10)
-            .into(),
+            App::Error {
+                message, devices, ..
+            } => {
+                let mut col = column![text("Error").size(22), text(message).size(14),].spacing(10);
+
+                if devices.is_some() {
+                    col = col.push(button("Back").on_press(Message::Back));
+                }
+
+                col.into()
+            }
         };
 
         container(content).padding(20).width(iced::Fill).into()
