@@ -291,16 +291,16 @@ impl App {
                             if devices[*selected_device].path == for_device {
                                 *networks = nets;
                             }
-                        } else if let Some((devices, selected_device)) = self.device_info() {
-                            if devices[selected_device].path == for_device {
-                                *self = App::Loaded {
-                                    devices,
-                                    selected_device,
-                                    networks: nets,
-                                    connecting_ssid: None,
-                                    password: String::new(),
-                                };
-                            }
+                        } else if let Some((devices, selected_device)) = self.device_info()
+                            && devices[selected_device].path == for_device
+                        {
+                            *self = App::Loaded {
+                                devices,
+                                selected_device,
+                                networks: nets,
+                                connecting_ssid: None,
+                                password: String::new(),
+                            };
                         }
                     }
                     Err(e) => self.goto_error(e),

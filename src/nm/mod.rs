@@ -318,7 +318,19 @@ pub async fn connect(network: Network, password: String) -> Result<(), String> {
             .activate_connection(&saved_obj, &device_path, &ap_path)
             .await
             .map_err(|e| format!("Failed to connect: {e}"))?;
-        return wait_for_activation(&connection, &active_path).await;
+        let result = wait_for_activation(&connection, &active_path).await;
+        if result.is_err() {
+            // Delete the saved profile so the user can retry with a new password
+            if let Ok(conn_proxy) = SettingsConnectionProxy::builder(&connection)
+                .path(saved_path.as_ref())
+                .unwrap()
+                .build()
+                .await
+            {
+                let _ = conn_proxy.delete().await;
+            }
+        }
+        return result;
     }
 
     // No saved connection — build settings and create a new one
@@ -346,12 +358,24 @@ pub async fn connect(network: Network, password: String) -> Result<(), String> {
         settings.insert("802-11-wireless-security", security_section);
     }
 
-    let (active_path, _settings_path) = nm
+    let (active_path, settings_path) = nm
         .add_and_activate_connection(settings, &device_path, &ap_path)
         .await
         .map_err(|e| format!("Failed to connect: {e}"))?;
 
-    wait_for_activation(&connection, &active_path).await
+    let result = wait_for_activation(&connection, &active_path).await;
+    if result.is_err() {
+        // Delete the saved profile so the user can retry with a new password
+        if let Ok(conn_proxy) = SettingsConnectionProxy::builder(&connection)
+            .path(settings_path.as_ref())
+            .unwrap()
+            .build()
+            .await
+        {
+            let _ = conn_proxy.delete().await;
+        }
+    }
+    result
 }
 
 /// Check if the given device has an active WiFi connection.

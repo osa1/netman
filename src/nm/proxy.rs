@@ -139,4 +139,7 @@ pub trait Settings {
 pub trait SettingsConnection {
     #[zbus(name = "GetSettings")]
     fn get_settings(&self) -> zbus::Result<HashMap<String, HashMap<String, OwnedValue>>>;
+
+    #[zbus(name = "Delete")]
+    fn delete(&self) -> zbus::Result<()>;
 }
