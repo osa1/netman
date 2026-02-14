@@ -29,6 +29,12 @@ pub trait NetworkManager {
         specific_object: &zbus::zvariant::ObjectPath<'_>,
     ) -> zbus::Result<(OwnedObjectPath, OwnedObjectPath)>;
 
+    #[zbus(signal)]
+    fn device_added(&self, device: zbus::zvariant::ObjectPath<'_>) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    fn device_removed(&self, device: zbus::zvariant::ObjectPath<'_>) -> zbus::Result<()>;
+
     #[zbus(name = "ActivateConnection")]
     fn activate_connection(
         &self,

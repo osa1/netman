@@ -48,8 +48,9 @@ enum App {
 enum Message {
     DevicesLoaded(Result<Vec<nm::WifiDevice>, String>),
     DeviceSelected(nm::WifiDevice),
-    NetworksLoaded(Result<Vec<nm::Network>, String>),
+    NetworksLoaded(Result<Vec<nm::Network>, String>, String),
     NetworkChanged,
+    DevicesChanged,
     Refresh,
     Back,
     Disconnect,
@@ -105,6 +106,38 @@ fn nm_signals(device_path: &String) -> iced::futures::stream::BoxStream<'static,
     ))
 }
 
+fn nm_device_signal_stream() -> iced::futures::stream::BoxStream<'static, Message> {
+    Box::pin(iced::stream::channel(
+        10,
+        async move |mut output: iced::futures::channel::mpsc::Sender<Message>| {
+            use nm::proxy::NetworkManagerProxy;
+
+            let Ok(conn) = zbus::Connection::system().await else {
+                return;
+            };
+            let Ok(nm): Result<NetworkManagerProxy, _> = NetworkManagerProxy::new(&conn).await
+            else {
+                return;
+            };
+            let Ok(dev_added) = nm.receive_device_added().await else {
+                return;
+            };
+            let Ok(dev_removed) = nm.receive_device_removed().await else {
+                return;
+            };
+
+            let mut merged = iced::futures::stream::select(
+                dev_added.map(|_| Message::DevicesChanged),
+                dev_removed.map(|_| Message::DevicesChanged),
+            );
+
+            while let Some(msg) = merged.next().await {
+                let _ = output.send(msg).await;
+            }
+        },
+    ))
+}
+
 impl App {
     fn new() -> (Self, Task<Message>) {
         (
@@ -126,6 +159,8 @@ impl App {
             _ => None,
         });
 
+        let dev_signals = Subscription::run(nm_device_signal_stream);
+
         if let App::Loaded {
             devices,
             selected_device,
@@ -133,9 +168,13 @@ impl App {
         } = self
         {
             let device_path = devices[*selected_device].path.clone();
-            Subscription::batch([kbd, Subscription::run_with(device_path, nm_signals)])
+            Subscription::batch([
+                kbd,
+                dev_signals,
+                Subscription::run_with(device_path, nm_signals),
+            ])
         } else {
-            kbd
+            Subscription::batch([kbd, dev_signals])
         }
     }
 
@@ -178,8 +217,11 @@ impl App {
     fn scan_selected(&self, devices: &[nm::WifiDevice], selected: usize) -> Task<Message> {
         let path = devices[selected].path.clone();
         Task::perform(
-            async move { nm::scan_networks(&path).await },
-            Message::NetworksLoaded,
+            async move {
+                let result = nm::scan_networks(&path).await;
+                (result, path)
+            },
+            |(result, path)| Message::NetworksLoaded(result, path),
         )
     }
 
@@ -187,10 +229,15 @@ impl App {
         match message {
             Message::DevicesLoaded(result) => match result {
                 Ok(devices) => {
-                    let task = self.scan_selected(&devices, 0);
+                    // Preserve previous selection if the device still exists
+                    let prev_path = self.device_info().map(|(d, s)| d[s].path.clone());
+                    let selected = prev_path
+                        .and_then(|p| devices.iter().position(|d| d.path == p))
+                        .unwrap_or(0);
+                    let task = self.scan_selected(&devices, selected);
                     *self = App::Loaded {
                         devices,
-                        selected_device: 0,
+                        selected_device: selected,
                         networks: Vec::new(),
                         connecting_ssid: None,
                         password: String::new(),
@@ -222,25 +269,38 @@ impl App {
                     *password = String::new();
                     let path = devices[idx].path.clone();
                     return Task::perform(
-                        async move { nm::scan_networks(&path).await },
-                        Message::NetworksLoaded,
+                        async move {
+                            let result = nm::scan_networks(&path).await;
+                            (result, path)
+                        },
+                        |(result, path)| Message::NetworksLoaded(result, path),
                     );
                 }
                 Task::none()
             }
-            Message::NetworksLoaded(result) => {
+            Message::NetworksLoaded(result, for_device) => {
                 match result {
                     Ok(nets) => {
-                        if let App::Loaded { networks, .. } = self {
-                            *networks = nets;
+                        if let App::Loaded {
+                            devices,
+                            selected_device,
+                            networks,
+                            ..
+                        } = self
+                        {
+                            if devices[*selected_device].path == for_device {
+                                *networks = nets;
+                            }
                         } else if let Some((devices, selected_device)) = self.device_info() {
-                            *self = App::Loaded {
-                                devices,
-                                selected_device,
-                                networks: nets,
-                                connecting_ssid: None,
-                                password: String::new(),
-                            };
+                            if devices[selected_device].path == for_device {
+                                *self = App::Loaded {
+                                    devices,
+                                    selected_device,
+                                    networks: nets,
+                                    connecting_ssid: None,
+                                    password: String::new(),
+                                };
+                            }
                         }
                     }
                     Err(e) => self.goto_error(e),
@@ -256,11 +316,18 @@ impl App {
                 {
                     let path = devices[*selected_device].path.clone();
                     return Task::perform(
-                        async move { nm::scan_networks(&path).await },
-                        Message::NetworksLoaded,
+                        async move {
+                            let result = nm::scan_networks(&path).await;
+                            (result, path)
+                        },
+                        |(result, path)| Message::NetworksLoaded(result, path),
                     );
                 }
                 Task::none()
+            }
+            Message::DevicesChanged => {
+                *self = App::Loading;
+                Task::perform(nm::list_wifi_devices(), Message::DevicesLoaded)
             }
             Message::Back => {
                 if let App::Error { .. } = self
