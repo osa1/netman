@@ -12,6 +12,12 @@ pub trait NetworkManager {
 
     #[zbus(property)]
     fn active_connections(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+
+    #[zbus(name = "DeactivateConnection")]
+    fn deactivate_connection(
+        &self,
+        active_connection: &zbus::zvariant::ObjectPath<'_>,
+    ) -> zbus::Result<()>;
 }
 
 #[proxy(
@@ -63,4 +69,13 @@ pub trait AccessPoint {
 
     #[zbus(property)]
     fn rsn_flags(&self) -> zbus::Result<u32>;
+}
+
+#[proxy(
+    interface = "org.freedesktop.NetworkManager.Connection.Active",
+    default_service = "org.freedesktop.NetworkManager"
+)]
+pub trait ActiveConnection {
+    #[zbus(property, name = "Type")]
+    fn connection_type(&self) -> zbus::Result<String>;
 }

@@ -21,6 +21,8 @@ enum App {
 enum Message {
     NetworksLoaded(Result<Vec<nm::Network>, String>),
     Refresh,
+    Disconnect,
+    Disconnected(Result<(), String>),
 }
 
 impl App {
@@ -41,6 +43,15 @@ impl App {
                 Task::none()
             }
             Message::Refresh => {
+                *self = App::Loading;
+                Task::perform(nm::scan_networks(), Message::NetworksLoaded)
+            }
+            Message::Disconnect => Task::perform(nm::disconnect(), Message::Disconnected),
+            Message::Disconnected(result) => {
+                if let Err(e) = result {
+                    *self = App::Error(e);
+                    return Task::none();
+                }
                 *self = App::Loading;
                 Task::perform(nm::scan_networks(), Message::NetworksLoaded)
             }
@@ -65,16 +76,22 @@ impl App {
                         .into()
                 } else {
                     let list = networks.iter().fold(column![].spacing(4), |col, network| {
-                        let ssid_text = if network.is_connected {
-                            text(format!("{} (Connected)", network.ssid)).size(16)
-                        } else {
-                            text(&network.ssid).size(16)
-                        };
+                        let ssid_text = text(&network.ssid).size(16);
 
                         let info =
                             text(format!("{}%  {}", network.strength, network.security)).size(13);
 
-                        let network_row = column![ssid_text, info].spacing(2).padding(6);
+                        let mut network_row = row![
+                            column![ssid_text, info].spacing(2),
+                            iced::widget::space::horizontal(),
+                        ]
+                        .align_y(iced::Alignment::Center)
+                        .padding(6);
+
+                        if network.is_connected {
+                            network_row = network_row
+                                .push(button("Disconnect").on_press(Message::Disconnect));
+                        }
 
                         col.push(network_row)
                             .push(iced::widget::rule::horizontal(1))

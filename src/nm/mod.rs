@@ -2,7 +2,9 @@ mod proxy;
 
 use std::collections::HashMap;
 
-use proxy::{AccessPointProxy, DeviceProxy, NetworkManagerProxy, WirelessProxy};
+use proxy::{
+    AccessPointProxy, ActiveConnectionProxy, DeviceProxy, NetworkManagerProxy, WirelessProxy,
+};
 
 #[derive(Debug, Clone)]
 pub struct Network {
@@ -124,10 +126,47 @@ pub async fn scan_networks() -> Result<Vec<Network>, String> {
         });
     }
 
-    // Deduplicate by SSID, keeping the strongest signal
-    networks.sort_by(|a, b| b.strength.cmp(&a.strength));
+    // Deduplicate by SSID: prefer connected, then strongest signal
+    networks.sort_by(|a, b| {
+        b.is_connected
+            .cmp(&a.is_connected)
+            .then(b.strength.cmp(&a.strength))
+    });
     let mut seen = std::collections::HashSet::new();
     networks.retain(|n| seen.insert(n.ssid.clone()));
 
     Ok(networks)
+}
+
+pub async fn disconnect() -> Result<(), String> {
+    let connection = zbus::Connection::system()
+        .await
+        .map_err(|e| format!("Failed to connect to system D-Bus: {e}"))?;
+
+    let nm = NetworkManagerProxy::new(&connection)
+        .await
+        .map_err(|e| format!("Failed to create NetworkManager proxy: {e}"))?;
+
+    let active_connections = nm
+        .active_connections()
+        .await
+        .map_err(|e| format!("Failed to get active connections: {e}"))?;
+
+    for path in &active_connections {
+        let ac = ActiveConnectionProxy::builder(&connection)
+            .path(path)
+            .map_err(|e| format!("Invalid active connection path: {e}"))?
+            .build()
+            .await
+            .map_err(|e| format!("Failed to create active connection proxy: {e}"))?;
+
+        if ac.connection_type().await.unwrap_or_default() == "802-11-wireless" {
+            nm.deactivate_connection(path)
+                .await
+                .map_err(|e| format!("Failed to disconnect: {e}"))?;
+            return Ok(());
+        }
+    }
+
+    Err("No active WiFi connection found".to_string())
 }
