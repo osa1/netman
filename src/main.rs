@@ -1,6 +1,6 @@
 mod nm;
 
-use iced::widget::{button, center, column, container, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, row, scrollable, text, text_input};
 use iced::{Element, Task, Theme, window};
 
 fn main() -> iced::Result {
@@ -230,6 +230,6 @@ impl App {
             .into(),
         };
 
-        center(container(content).padding(20).max_width(380)).into()
+        container(content).padding(20).width(iced::Fill).into()
     }
 }
