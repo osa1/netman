@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use zbus::proxy;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 #[proxy(
     interface = "org.freedesktop.NetworkManager",
@@ -28,6 +28,14 @@ pub trait NetworkManager {
         device: &zbus::zvariant::ObjectPath<'_>,
         specific_object: &zbus::zvariant::ObjectPath<'_>,
     ) -> zbus::Result<(OwnedObjectPath, OwnedObjectPath)>;
+
+    #[zbus(name = "ActivateConnection")]
+    fn activate_connection(
+        &self,
+        connection: &zbus::zvariant::ObjectPath<'_>,
+        device: &zbus::zvariant::ObjectPath<'_>,
+        specific_object: &zbus::zvariant::ObjectPath<'_>,
+    ) -> zbus::Result<OwnedObjectPath>;
 }
 
 #[proxy(
@@ -88,4 +96,23 @@ pub trait AccessPoint {
 pub trait ActiveConnection {
     #[zbus(property, name = "Type")]
     fn connection_type(&self) -> zbus::Result<String>;
+}
+
+#[proxy(
+    interface = "org.freedesktop.NetworkManager.Settings",
+    default_service = "org.freedesktop.NetworkManager",
+    default_path = "/org/freedesktop/NetworkManager/Settings"
+)]
+pub trait Settings {
+    #[zbus(name = "ListConnections")]
+    fn list_connections(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+}
+
+#[proxy(
+    interface = "org.freedesktop.NetworkManager.Settings.Connection",
+    default_service = "org.freedesktop.NetworkManager"
+)]
+pub trait SettingsConnection {
+    #[zbus(name = "GetSettings")]
+    fn get_settings(&self) -> zbus::Result<HashMap<String, HashMap<String, OwnedValue>>>;
 }

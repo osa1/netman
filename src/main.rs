@@ -87,9 +87,9 @@ impl App {
                     password,
                 } = self
                 {
-                    // Open networks: connect immediately
+                    // Open or saved networks: connect immediately (no password needed)
                     if let Some(net) = networks.iter().find(|n| n.ssid == ssid)
-                        && net.security == "Open"
+                        && (net.security == "Open" || net.is_saved)
                     {
                         let net = net.clone();
                         *self = App::Connecting;

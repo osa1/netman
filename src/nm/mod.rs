@@ -3,7 +3,8 @@ mod proxy;
 use std::collections::HashMap;
 
 use proxy::{
-    AccessPointProxy, ActiveConnectionProxy, DeviceProxy, NetworkManagerProxy, WirelessProxy,
+    AccessPointProxy, ActiveConnectionProxy, DeviceProxy, NetworkManagerProxy,
+    SettingsConnectionProxy, SettingsProxy, WirelessProxy,
 };
 
 #[derive(Debug, Clone)]
@@ -12,6 +13,7 @@ pub struct Network {
     pub strength: u8,
     pub security: String,
     pub is_connected: bool,
+    pub is_saved: bool,
     pub ap_path: String,
     pub device_path: String,
 }
@@ -44,6 +46,53 @@ fn security_from_flags(flags: u32, wpa_flags: u32, rsn_flags: u32) -> String {
         return "WEP".to_string();
     }
     "Open".to_string()
+}
+
+fn get_wifi_ssid(
+    s: &HashMap<String, HashMap<String, zbus::zvariant::OwnedValue>>,
+) -> Option<String> {
+    let conn_type = s.get("connection")?.get("type")?;
+    let conn_type: &str = conn_type.try_into().ok()?;
+    if conn_type != "802-11-wireless" {
+        return None;
+    }
+    let ssid_val = s.get("802-11-wireless")?.get("ssid")?;
+    let ssid_array: &zbus::zvariant::Array<'_> = ssid_val.try_into().ok()?;
+    let ssid_bytes: Vec<u8> = ssid_array
+        .iter()
+        .filter_map(|v| u8::try_from(v).ok())
+        .collect();
+    let ssid = String::from_utf8_lossy(&ssid_bytes).to_string();
+    if ssid.is_empty() { None } else { Some(ssid) }
+}
+
+async fn saved_wifi_ssids(connection: &zbus::Connection) -> std::collections::HashSet<String> {
+    let mut ssids = std::collections::HashSet::new();
+
+    let Ok(settings) = SettingsProxy::new(connection).await else {
+        return ssids;
+    };
+    let Ok(conn_paths) = settings.list_connections().await else {
+        return ssids;
+    };
+
+    for path in &conn_paths {
+        let Ok(builder) = SettingsConnectionProxy::builder(connection).path(path) else {
+            continue;
+        };
+        let Ok(conn) = builder.build().await else {
+            continue;
+        };
+        let Ok(s) = conn.get_settings().await else {
+            continue;
+        };
+
+        if let Some(ssid) = get_wifi_ssid(&s) {
+            ssids.insert(ssid);
+        }
+    }
+
+    ssids
 }
 
 pub async fn scan_networks() -> Result<Vec<Network>, String> {
@@ -95,6 +144,9 @@ pub async fn scan_networks() -> Result<Vec<Network>, String> {
         .await
         .map_err(|e| format!("Failed to get access points: {e}"))?;
 
+    // Collect saved WiFi SSIDs
+    let saved_ssids = saved_wifi_ssids(&connection).await;
+
     let mut networks: Vec<Network> = Vec::new();
 
     for ap_path in &ap_paths {
@@ -120,11 +172,14 @@ pub async fn scan_networks() -> Result<Vec<Network>, String> {
 
         let is_connected = active_ap.as_ref().is_some_and(|active| active == ap_path);
 
+        let is_saved = saved_ssids.contains(&ssid);
+
         networks.push(Network {
             ssid,
             strength,
             security: security_from_flags(flags, wpa_flags, rsn_flags),
             is_connected,
+            is_saved,
             ap_path: ap_path.to_string(),
             device_path: wifi_path.to_string(),
         });
@@ -142,6 +197,41 @@ pub async fn scan_networks() -> Result<Vec<Network>, String> {
     Ok(networks)
 }
 
+/// Find a saved connection profile matching the given SSID.
+/// Returns the connection object path if found.
+async fn find_saved_connection(
+    connection: &zbus::Connection,
+    ssid: &str,
+) -> Result<Option<zbus::zvariant::OwnedObjectPath>, String> {
+    let settings = SettingsProxy::new(connection)
+        .await
+        .map_err(|e| format!("Failed to create Settings proxy: {e}"))?;
+
+    let connections = settings
+        .list_connections()
+        .await
+        .map_err(|e| format!("Failed to list connections: {e}"))?;
+
+    for path in connections {
+        let conn = SettingsConnectionProxy::builder(connection)
+            .path(&path)
+            .map_err(|e| format!("Invalid connection path: {e}"))?
+            .build()
+            .await
+            .map_err(|e| format!("Failed to create connection proxy: {e}"))?;
+
+        let Ok(s) = conn.get_settings().await else {
+            continue;
+        };
+
+        if get_wifi_ssid(&s).as_deref() == Some(ssid) {
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
+}
+
 pub async fn connect(network: Network, password: String) -> Result<(), String> {
     let connection = zbus::Connection::system()
         .await
@@ -156,6 +246,17 @@ pub async fn connect(network: Network, password: String) -> Result<(), String> {
     let ap_path = zbus::zvariant::ObjectPath::try_from(network.ap_path.as_str())
         .map_err(|e| format!("Invalid AP path: {e}"))?;
 
+    // Check if there's a saved connection profile for this SSID
+    if let Some(saved_path) = find_saved_connection(&connection, &network.ssid).await? {
+        let saved_obj = zbus::zvariant::ObjectPath::try_from(saved_path.as_str())
+            .map_err(|e| format!("Invalid saved connection path: {e}"))?;
+        nm.activate_connection(&saved_obj, &device_path, &ap_path)
+            .await
+            .map_err(|e| format!("Failed to connect: {e}"))?;
+        return Ok(());
+    }
+
+    // No saved connection — build settings and create a new one
     let mut settings: HashMap<&str, HashMap<&str, zbus::zvariant::Value<'_>>> = HashMap::new();
 
     let mut conn_section: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
