@@ -119,6 +119,10 @@ impl App {
                 key: keyboard::Key::Named(keyboard::key::Named::Escape),
                 ..
             }) => Some(Message::CancelConnect),
+            event::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Enter),
+                ..
+            }) => Some(Message::Back),
             _ => None,
         });
 
@@ -259,7 +263,9 @@ impl App {
                 Task::none()
             }
             Message::Back => {
-                if let Some((devices, selected)) = self.device_info() {
+                if let App::Error { .. } = self
+                    && let Some((devices, selected)) = self.device_info()
+                {
                     let task = self.scan_selected(&devices, selected);
                     *self = App::Loaded {
                         devices,
