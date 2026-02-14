@@ -218,7 +218,17 @@ impl App {
                             .push(iced::widget::rule::horizontal(1))
                     });
 
-                    column![header, scrollable(list)].spacing(15).into()
+                    let thin_scrollbar = scrollable::Scrollbar::new()
+                        .width(6)
+                        .scroller_width(6)
+                        .spacing(0);
+
+                    column![
+                        header,
+                        scrollable(list).direction(scrollable::Direction::Vertical(thin_scrollbar)),
+                    ]
+                    .spacing(15)
+                    .into()
                 }
             }
             App::Error(e) => column![
