@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use zbus::proxy;
 use zbus::zvariant::OwnedObjectPath;
 
@@ -18,6 +20,14 @@ pub trait NetworkManager {
         &self,
         active_connection: &zbus::zvariant::ObjectPath<'_>,
     ) -> zbus::Result<()>;
+
+    #[zbus(name = "AddAndActivateConnection")]
+    fn add_and_activate_connection(
+        &self,
+        connection: HashMap<&str, HashMap<&str, zbus::zvariant::Value<'_>>>,
+        device: &zbus::zvariant::ObjectPath<'_>,
+        specific_object: &zbus::zvariant::ObjectPath<'_>,
+    ) -> zbus::Result<(OwnedObjectPath, OwnedObjectPath)>;
 }
 
 #[proxy(

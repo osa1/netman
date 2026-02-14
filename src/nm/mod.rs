@@ -12,6 +12,8 @@ pub struct Network {
     pub strength: u8,
     pub security: String,
     pub is_connected: bool,
+    pub ap_path: String,
+    pub device_path: String,
 }
 
 fn security_from_flags(flags: u32, wpa_flags: u32, rsn_flags: u32) -> String {
@@ -123,6 +125,8 @@ pub async fn scan_networks() -> Result<Vec<Network>, String> {
             strength,
             security: security_from_flags(flags, wpa_flags, rsn_flags),
             is_connected,
+            ap_path: ap_path.to_string(),
+            device_path: wifi_path.to_string(),
         });
     }
 
@@ -136,6 +140,51 @@ pub async fn scan_networks() -> Result<Vec<Network>, String> {
     networks.retain(|n| seen.insert(n.ssid.clone()));
 
     Ok(networks)
+}
+
+pub async fn connect(network: Network, password: String) -> Result<(), String> {
+    let connection = zbus::Connection::system()
+        .await
+        .map_err(|e| format!("Failed to connect to system D-Bus: {e}"))?;
+
+    let nm = NetworkManagerProxy::new(&connection)
+        .await
+        .map_err(|e| format!("Failed to create NetworkManager proxy: {e}"))?;
+
+    let device_path = zbus::zvariant::ObjectPath::try_from(network.device_path.as_str())
+        .map_err(|e| format!("Invalid device path: {e}"))?;
+    let ap_path = zbus::zvariant::ObjectPath::try_from(network.ap_path.as_str())
+        .map_err(|e| format!("Invalid AP path: {e}"))?;
+
+    let mut settings: HashMap<&str, HashMap<&str, zbus::zvariant::Value<'_>>> = HashMap::new();
+
+    let mut conn_section: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
+    conn_section.insert("type", "802-11-wireless".into());
+    conn_section.insert("id", network.ssid.as_str().into());
+    settings.insert("connection", conn_section);
+
+    let mut wireless_section: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
+    wireless_section.insert("ssid", zbus::zvariant::Value::from(network.ssid.as_bytes()));
+    wireless_section.insert("mode", "infrastructure".into());
+    settings.insert("802-11-wireless", wireless_section);
+
+    if network.security != "Open" {
+        let mut security_section: HashMap<&str, zbus::zvariant::Value<'_>> = HashMap::new();
+        let key_mgmt = if network.security == "WPA3" {
+            "sae"
+        } else {
+            "wpa-psk"
+        };
+        security_section.insert("key-mgmt", key_mgmt.into());
+        security_section.insert("psk", password.as_str().into());
+        settings.insert("802-11-wireless-security", security_section);
+    }
+
+    nm.add_and_activate_connection(settings, &device_path, &ap_path)
+        .await
+        .map_err(|e| format!("Failed to connect: {e}"))?;
+
+    Ok(())
 }
 
 pub async fn disconnect() -> Result<(), String> {
