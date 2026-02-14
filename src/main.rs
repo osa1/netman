@@ -160,7 +160,8 @@ impl App {
                     button("Refresh").on_press(Message::Refresh),
                 ]
                 .align_y(iced::Alignment::Center)
-                .spacing(10);
+                .spacing(10)
+                .padding(6);
 
                 if networks.is_empty() {
                     column![header, text("No networks found.").size(16)]
