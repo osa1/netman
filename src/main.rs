@@ -183,11 +183,9 @@ impl App {
                                 .on_submit(Message::SubmitConnect)
                                 .secure(true)
                                 .size(14)
-                                .width(150);
+                                .width(iced::Fill);
 
                             row![
-                                column![ssid_text, info].spacing(2),
-                                iced::widget::space::horizontal(),
                                 input,
                                 button("Go").on_press(Message::SubmitConnect),
                                 button("X").on_press(Message::CancelConnect),
