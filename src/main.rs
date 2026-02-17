@@ -476,8 +476,26 @@ impl App {
                     ..
                 } = self
                 {
-                    *connecting_ssid = None;
-                    *password = String::new();
+                    if connecting_ssid.is_some() {
+                        *connecting_ssid = None;
+                        *password = String::new();
+                        return Task::none();
+                    }
+                    return iced::exit();
+                }
+                if let App::Error { .. } = self
+                    && let Some((devices, selected)) = self.device_info()
+                {
+                    let task = self.scan_selected(&devices, selected);
+                    *self = App::Loaded {
+                        devices,
+                        selected_device: selected,
+                        networks: Vec::new(),
+                        connecting_ssid: None,
+                        password: String::new(),
+                        wifi_enabled: true,
+                    };
+                    return task;
                 }
                 Task::none()
             }
