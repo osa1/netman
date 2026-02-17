@@ -265,6 +265,14 @@ async fn find_saved_connection(
     Ok(None)
 }
 
+// NMActiveConnectionState
+// https://networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMActiveConnectionState
+const _NM_ACTIVE_CONNECTION_STATE_UNKNOWN: u32 = 0;
+const NM_ACTIVE_CONNECTION_STATE_ACTIVATING: u32 = 1;
+const NM_ACTIVE_CONNECTION_STATE_ACTIVATED: u32 = 2;
+const NM_ACTIVE_CONNECTION_STATE_DEACTIVATING: u32 = 3;
+const NM_ACTIVE_CONNECTION_STATE_DEACTIVATED: u32 = 4;
+
 /// Poll an active connection until it reaches Activated or fails.
 async fn wait_for_activation(
     connection: &zbus::Connection,
@@ -279,14 +287,14 @@ async fn wait_for_activation(
 
     for _ in 0..15 {
         match ac.state().await {
-            Ok(2) => return Ok(()), // Activated
-            Ok(3) | Ok(4) => {
-                // Deactivating / Deactivated
+            Ok(NM_ACTIVE_CONNECTION_STATE_ACTIVATED) => return Ok(()),
+            Ok(
+                NM_ACTIVE_CONNECTION_STATE_DEACTIVATING | NM_ACTIVE_CONNECTION_STATE_DEACTIVATED,
+            ) => {
                 return Err("Connection failed (wrong password?)".to_string());
             }
-            Ok(1) => {} // Activating — keep waiting
+            Ok(NM_ACTIVE_CONNECTION_STATE_ACTIVATING) => {} // keep waiting
             Ok(_) | Err(_) => {
-                // Unknown or proxy error (object removed)
                 return Err("Connection failed".to_string());
             }
         }
