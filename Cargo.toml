@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-io = "2"
 iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "thread-pool", "wayland", "x11"] }
 zbus = "5.13.2"

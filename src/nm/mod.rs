@@ -290,7 +290,7 @@ async fn wait_for_activation(
                 return Err("Connection failed".to_string());
             }
         }
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        async_io::Timer::after(std::time::Duration::from_secs(1)).await;
     }
 
     Err("Connection timed out".to_string())
@@ -449,7 +449,7 @@ pub async fn disconnect(device_path: &str) -> Result<(), String> {
 
     // Poll until NetworkManager confirms no active WiFi on this device
     for _ in 0..10 {
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        async_io::Timer::after(std::time::Duration::from_secs(1)).await;
         if !has_active_wifi_on_device(&nm, &connection, device_path).await? {
             return Ok(());
         }
