@@ -28,8 +28,8 @@ Please make sure to test these scenarios manually before sending patches:
 
 - The GUI should update itself automatically: with device changes
   (added/removed), when you connect/disconnect via another method while the app
-  is running (e.g. run `nmcli device disconnect <device id>` in a shell while
-  the app is running).
+  is running (e.g. run `nmcli device disconnect <device id>`, `nmcli radio wifi
+  off/on` in a shell while the app is running).
 
 [NetworkManager]: https://www.networkmanager.dev/docs/api/latest/
 [iced]: https://iced.rs/

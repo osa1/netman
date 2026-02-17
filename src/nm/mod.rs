@@ -465,3 +465,30 @@ pub async fn disconnect(device_path: &str) -> Result<(), String> {
 
     Err("Disconnect timed out".to_string())
 }
+
+pub async fn get_wifi_enabled() -> Result<bool, String> {
+    let connection = zbus::Connection::system()
+        .await
+        .map_err(|e| format!("Failed to connect to system D-Bus: {e}"))?;
+    let nm = NetworkManagerProxy::new(&connection)
+        .await
+        .map_err(|e| format!("Failed to create NetworkManager proxy: {e}"))?;
+    nm.wireless_enabled()
+        .await
+        .map_err(|e| format!("Failed to get WiFi state: {e}"))
+}
+
+pub async fn set_wifi_enabled(enabled: bool) -> Result<bool, String> {
+    let connection = zbus::Connection::system()
+        .await
+        .map_err(|e| format!("Failed to connect to system D-Bus: {e}"))?;
+    let nm = NetworkManagerProxy::new(&connection)
+        .await
+        .map_err(|e| format!("Failed to create NetworkManager proxy: {e}"))?;
+    nm.set_wireless_enabled(enabled)
+        .await
+        .map_err(|e| format!("Failed to set WiFi state: {e}"))?;
+    nm.wireless_enabled()
+        .await
+        .map_err(|e| format!("Failed to get WiFi state: {e}"))
+}

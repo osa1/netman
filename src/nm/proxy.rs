@@ -35,6 +35,12 @@ pub trait NetworkManager {
     #[zbus(signal)]
     fn device_removed(&self, device: zbus::zvariant::ObjectPath<'_>) -> zbus::Result<()>;
 
+    #[zbus(property)]
+    fn wireless_enabled(&self) -> zbus::Result<bool>;
+
+    #[zbus(property)]
+    fn set_wireless_enabled(&self, value: bool) -> zbus::Result<()>;
+
     #[zbus(name = "ActivateConnection")]
     fn activate_connection(
         &self,

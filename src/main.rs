@@ -28,6 +28,7 @@ enum App {
         networks: Vec<nm::Network>,
         connecting_ssid: Option<String>,
         password: String,
+        wifi_enabled: bool,
     },
     Connecting {
         devices: Vec<nm::WifiDevice>,
@@ -60,6 +61,10 @@ enum Message {
     SubmitConnect,
     CancelConnect,
     Connected(Result<(), String>),
+    WifiEnabledChanged,
+    WifiEnabledLoaded(Result<bool, String>),
+    ToggleWifi(bool),
+    WifiToggled(Result<bool, String>),
 }
 
 #[allow(clippy::ptr_arg)]
@@ -125,10 +130,14 @@ fn nm_device_signal_stream() -> iced::futures::stream::BoxStream<'static, Messag
             let Ok(dev_removed) = nm.receive_device_removed().await else {
                 return;
             };
+            let wifi_changed = nm.receive_wireless_enabled_changed().await;
 
             let mut merged = iced::futures::stream::select(
-                dev_added.map(|_| Message::DevicesChanged),
-                dev_removed.map(|_| Message::DevicesChanged),
+                iced::futures::stream::select(
+                    dev_added.map(|_| Message::DevicesChanged),
+                    dev_removed.map(|_| Message::DevicesChanged),
+                ),
+                wifi_changed.map(|_| Message::WifiEnabledChanged),
             );
 
             while let Some(msg) = merged.next().await {
@@ -164,8 +173,10 @@ impl App {
         if let App::Loaded {
             devices,
             selected_device,
+            wifi_enabled,
             ..
         } = self
+            && *wifi_enabled
         {
             let device_path = devices[*selected_device].path.clone();
             Subscription::batch([
@@ -241,8 +252,12 @@ impl App {
                         networks: Vec::new(),
                         connecting_ssid: None,
                         password: String::new(),
+                        wifi_enabled: true,
                     };
-                    task
+                    Task::batch([
+                        task,
+                        Task::perform(nm::get_wifi_enabled(), Message::WifiEnabledLoaded),
+                    ])
                 }
                 Err(e) => {
                     *self = App::Error {
@@ -260,6 +275,7 @@ impl App {
                     networks,
                     connecting_ssid,
                     password,
+                    ..
                 } = self
                     && let Some(idx) = devices.iter().position(|d| d == &device)
                 {
@@ -300,6 +316,7 @@ impl App {
                                 networks: nets,
                                 connecting_ssid: None,
                                 password: String::new(),
+                                wifi_enabled: true,
                             };
                         }
                     }
@@ -340,6 +357,7 @@ impl App {
                         networks: Vec::new(),
                         connecting_ssid: None,
                         password: String::new(),
+                        wifi_enabled: true,
                     };
                     return task;
                 }
@@ -354,6 +372,7 @@ impl App {
                         networks: Vec::new(),
                         connecting_ssid: None,
                         password: String::new(),
+                        wifi_enabled: true,
                     };
                     return task;
                 }
@@ -386,6 +405,7 @@ impl App {
                         networks: Vec::new(),
                         connecting_ssid: None,
                         password: String::new(),
+                        wifi_enabled: true,
                     };
                     return task;
                 }
@@ -398,6 +418,7 @@ impl App {
                     networks,
                     connecting_ssid,
                     password,
+                    ..
                 } = self
                 {
                     // Open or saved networks: connect immediately (no password needed)
@@ -432,6 +453,7 @@ impl App {
                     networks,
                     connecting_ssid: Some(ssid),
                     password,
+                    ..
                 } = self
                     && let Some(net) = networks.iter().find(|n| n.ssid == *ssid)
                 {
@@ -472,8 +494,52 @@ impl App {
                         networks: Vec::new(),
                         connecting_ssid: None,
                         password: String::new(),
+                        wifi_enabled: true,
                     };
                     return task;
+                }
+                Task::none()
+            }
+            Message::WifiEnabledChanged => {
+                Task::perform(nm::get_wifi_enabled(), Message::WifiEnabledLoaded)
+            }
+            Message::WifiEnabledLoaded(result) => {
+                match result {
+                    Ok(enabled) => {
+                        if let App::Loaded { wifi_enabled, .. } = self {
+                            *wifi_enabled = enabled;
+                        }
+                    }
+                    Err(e) => self.goto_error(e),
+                }
+                Task::none()
+            }
+            Message::ToggleWifi(enabled) => {
+                Task::perform(nm::set_wifi_enabled(enabled), Message::WifiToggled)
+            }
+            Message::WifiToggled(result) => {
+                match result {
+                    Ok(enabled) => {
+                        if enabled {
+                            // WiFi turned on — reload devices and networks
+                            *self = App::Loading;
+                            return Task::perform(nm::list_wifi_devices(), Message::DevicesLoaded);
+                        }
+                        if let App::Loaded {
+                            wifi_enabled,
+                            networks,
+                            connecting_ssid,
+                            password,
+                            ..
+                        } = self
+                        {
+                            *wifi_enabled = false;
+                            *networks = Vec::new();
+                            *connecting_ssid = None;
+                            *password = String::new();
+                        }
+                    }
+                    Err(e) => self.goto_error(e),
                 }
                 Task::none()
             }
@@ -491,6 +557,7 @@ impl App {
                 networks,
                 connecting_ssid,
                 password,
+                wifi_enabled,
             } => {
                 let mut header = row![text("WiFi Networks").size(22),]
                     .align_y(iced::Alignment::Center)
@@ -508,11 +575,21 @@ impl App {
                     );
                 }
 
-                header = header
-                    .push(iced::widget::space::horizontal())
-                    .push(button("Refresh").on_press(Message::Refresh));
+                header = header.push(iced::widget::space::horizontal());
 
-                if networks.is_empty() {
+                if *wifi_enabled {
+                    header = header
+                        .push(button("Refresh").on_press(Message::Refresh))
+                        .push(button("Turn off").on_press(Message::ToggleWifi(false)));
+                } else {
+                    header = header.push(button("Turn on").on_press(Message::ToggleWifi(true)));
+                }
+
+                if !wifi_enabled {
+                    column![header, text("WiFi is disabled").size(16)]
+                        .spacing(15)
+                        .into()
+                } else if networks.is_empty() {
                     column![header, text("Scanning...").size(16)]
                         .spacing(15)
                         .into()
